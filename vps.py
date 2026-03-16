@@ -32,7 +32,7 @@ except ImportError:
 
 logging.basicConfig(format="%(asctime)s [%(levelname)s] %(message)s", level=logging.INFO)
 
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8601314889:AAFsnobxIjXguKYdybttiRjPEXJYngrB8-k")
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  CURATED DATABASE
