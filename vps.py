@@ -1133,8 +1133,40 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await send("🏠 Main menu:", reply_markup=main_kb())
 
 # ══════════════════════════════════════════════════════════════════════════════
+#  HEALTH CHECK SERVER  (keeps Render / Railway / any web-host happy)
+# ══════════════════════════════════════════════════════════════════════════════
+async def health_server():
+    """Tiny HTTP server that responds 200 OK — satisfies Render's port check."""
+    from aiohttp import web as aio_web
+
+    port = int(os.getenv("PORT", 8080))
+
+    async def handle(_request):
+        cached = sum(len(e.data) for e in _cache.values() if e.is_fresh())
+        return aio_web.Response(
+            text=f"VPS Bot v5 alive | {len(FETCHERS)} providers | {cached} plans cached",
+            content_type="text/plain",
+        )
+
+    runner = aio_web.AppRunner(aio_web.Application())
+    await runner.setup()
+    runner.app.router.add_get("/",       handle)
+    runner.app.router.add_get("/health", handle)
+    site = aio_web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    log.info(f"✅ Health server listening on port {port}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 #  MAIN
 # ══════════════════════════════════════════════════════════════════════════════
+async def post_init(app_obj):
+    """Called by PTB once the event loop is running — safe place for tasks."""
+    asyncio.create_task(background_warmer())
+    asyncio.create_task(health_server())
+    log.info("🚀 Background warmer + health server started.")
+
+
 def main():
     if BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
         print("❌  Set token:  export TELEGRAM_BOT_TOKEN=xxx"); exit(1)
@@ -1143,11 +1175,18 @@ def main():
     print("║  VPS SCRAPER BOT v5 — MAXIMUM EDITION  🚀                  ║")
     print(f"║  {len(FETCHERS)} providers  ·  {len(FREE_VPS)} free tiers  ·  {len(FREE_SSH)} SSH  ·  {len(FREE_RDP)} RDP     ║")
     print("║  True parallel async · TTL cache · Value score           ║")
+    print("║  Render/Railway ready — health check on $PORT            ║")
     print("║  Press Ctrl+C to stop                                    ║")
     print("╚════════════════════════════════════════════════════════════╝\n")
 
-    app = Application.builder().token(BOT_TOKEN).build()
-    for cmd in ("start","help"):    app.add_handler(CommandHandler(cmd, cmd_start))
+    app = (
+        Application.builder()
+        .token(BOT_TOKEN)
+        .post_init(post_init)          # ← starts warmer + health server AFTER loop is live
+        .build()
+    )
+
+    for cmd in ("start", "help"):  app.add_handler(CommandHandler(cmd, cmd_start))
     app.add_handler(CommandHandler("free",    cmd_free))
     app.add_handler(CommandHandler("ssh",     cmd_ssh))
     app.add_handler(CommandHandler("rdp",     cmd_rdp))
@@ -1160,8 +1199,8 @@ def main():
     app.add_handler(CommandHandler("export",  cmd_export))
     app.add_handler(CallbackQueryHandler(on_callback))
 
-    asyncio.get_event_loop().create_task(background_warmer())
     app.run_polling(allowed_updates=Update.ALL_TYPES)
+
 
 if __name__ == "__main__":
     main()
