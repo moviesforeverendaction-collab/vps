@@ -1133,41 +1133,29 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await send("🏠 Main menu:", reply_markup=main_kb())
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  HEALTH CHECK SERVER  (keeps Render / Railway / any web-host happy)
+#  HEALTH CHECK SERVER  (keeps Render / Railway alive — binds to $PORT)
 # ══════════════════════════════════════════════════════════════════════════════
 async def health_server():
-    """Tiny HTTP server that responds 200 OK — satisfies Render's port check."""
     from aiohttp import web as aio_web
-
     port = int(os.getenv("PORT", 8080))
-
-    async def handle(_request):
+    async def handle(_req):
         cached = sum(len(e.data) for e in _cache.values() if e.is_fresh())
         return aio_web.Response(
-            text=f"VPS Bot v5 alive | {len(FETCHERS)} providers | {cached} plans cached",
+            text=f"VPS Bot v5 OK | {len(FETCHERS)} providers | {cached} plans cached",
             content_type="text/plain",
         )
-
-    runner = aio_web.AppRunner(aio_web.Application())
+    app_web = aio_web.Application()
+    app_web.router.add_get("/",       handle)
+    app_web.router.add_get("/health", handle)
+    runner = aio_web.AppRunner(app_web)
     await runner.setup()
-    runner.app.router.add_get("/",       handle)
-    runner.app.router.add_get("/health", handle)
-    site = aio_web.TCPSite(runner, "0.0.0.0", port)
-    await site.start()
-    log.info(f"✅ Health server listening on port {port}")
-
+    await aio_web.TCPSite(runner, "0.0.0.0", port).start()
+    log.info(f"✅ Health server on port {port}")
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  MAIN
+#  MAIN  — fully async, compatible with Python 3.14+
 # ══════════════════════════════════════════════════════════════════════════════
-async def post_init(app_obj):
-    """Called by PTB once the event loop is running — safe place for tasks."""
-    asyncio.create_task(background_warmer())
-    asyncio.create_task(health_server())
-    log.info("🚀 Background warmer + health server started.")
-
-
-def main():
+async def async_main():
     if BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
         print("❌  Set token:  export TELEGRAM_BOT_TOKEN=xxx"); exit(1)
 
@@ -1176,30 +1164,46 @@ def main():
     print(f"║  {len(FETCHERS)} providers  ·  {len(FREE_VPS)} free tiers  ·  {len(FREE_SSH)} SSH  ·  {len(FREE_RDP)} RDP     ║")
     print("║  True parallel async · TTL cache · Value score           ║")
     print("║  Render/Railway ready — health check on $PORT            ║")
-    print("║  Press Ctrl+C to stop                                    ║")
     print("╚════════════════════════════════════════════════════════════╝\n")
 
-    app = (
-        Application.builder()
-        .token(BOT_TOKEN)
-        .post_init(post_init)          # ← starts warmer + health server AFTER loop is live
-        .build()
-    )
+    # Build PTB app
+    ptb = Application.builder().token(BOT_TOKEN).build()
+    for cmd in ("start", "help"): ptb.add_handler(CommandHandler(cmd, cmd_start))
+    ptb.add_handler(CommandHandler("free",    cmd_free))
+    ptb.add_handler(CommandHandler("ssh",     cmd_ssh))
+    ptb.add_handler(CommandHandler("rdp",     cmd_rdp))
+    ptb.add_handler(CommandHandler("compare", cmd_compare))
+    ptb.add_handler(CommandHandler("deal",    cmd_deal))
+    ptb.add_handler(CommandHandler("deals",   cmd_deal))
+    ptb.add_handler(CommandHandler("filter",  cmd_filter_args))
+    ptb.add_handler(CommandHandler("all",     cmd_all))
+    ptb.add_handler(CommandHandler("stats",   cmd_stats))
+    ptb.add_handler(CommandHandler("export",  cmd_export))
+    ptb.add_handler(CallbackQueryHandler(on_callback))
 
-    for cmd in ("start", "help"):  app.add_handler(CommandHandler(cmd, cmd_start))
-    app.add_handler(CommandHandler("free",    cmd_free))
-    app.add_handler(CommandHandler("ssh",     cmd_ssh))
-    app.add_handler(CommandHandler("rdp",     cmd_rdp))
-    app.add_handler(CommandHandler("compare", cmd_compare))
-    app.add_handler(CommandHandler("deal",    cmd_deal))
-    app.add_handler(CommandHandler("deals",   cmd_deal))
-    app.add_handler(CommandHandler("filter",  cmd_filter_args))
-    app.add_handler(CommandHandler("all",     cmd_all))
-    app.add_handler(CommandHandler("stats",   cmd_stats))
-    app.add_handler(CommandHandler("export",  cmd_export))
-    app.add_handler(CallbackQueryHandler(on_callback))
+    # Start health server + background warmer as concurrent tasks
+    asyncio.create_task(health_server())
+    asyncio.create_task(background_warmer())
 
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    # Run the bot manually (initialize → start → idle → stop)
+    async with ptb:
+        await ptb.initialize()
+        await ptb.start()
+        await ptb.updater.start_polling(allowed_updates=Update.ALL_TYPES)
+        log.info("🤖 Bot is polling. Press Ctrl+C to stop.")
+        # Keep running until interrupted
+        try:
+            await asyncio.Event().wait()
+        except (KeyboardInterrupt, SystemExit):
+            pass
+        finally:
+            await ptb.updater.stop()
+            await ptb.stop()
+            await ptb.shutdown()
+
+
+def main():
+    asyncio.run(async_main())
 
 
 if __name__ == "__main__":
